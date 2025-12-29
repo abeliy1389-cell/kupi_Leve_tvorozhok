@@ -1,5 +1,22 @@
+# Базы данных
 *.db
-.DS_Store
+*.sqlite
+*.sqlite3
+
+# Python
 __pycache__/
-venv/
 *.pyc
+*.pyo
+*.pyd
+venv/
+env/
+
+# Системные файлы macOS
+.DS_Store
+
+# Конфиги с секретами
+.env
+config.py
+secrets.py
+token.txt
+*.key
