@@ -510,7 +510,43 @@ class Database:
         except Exception as e:
             logger.error(f"Ошибка delete_item_permanently: {e}")
             return False
+# БЫЛО (после delete_item_permanently ничего нет или другая функция)
+# ДОБАВЬТЕ ЭТУ НОВУЮ ФУНКЦИЮ:
 
+def restore_from_archive(self, item_id: int, user_id: int) -> bool:
+    """Восстанавливает товар из архива"""
+    try:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('BEGIN TRANSACTION')
+
+            # Получаем данные из архива
+            cursor.execute('''
+                SELECT ai.family_id, ai.added_by_user_id, ai.text, ai.created_at
+                FROM archive_items ai
+                WHERE ai.id = ?
+            ''', (item_id,))
+            item = cursor.fetchone()
+
+            if not item:
+                conn.rollback()
+                return False
+
+            # Добавляем обратно в активные
+            cursor.execute('''
+                INSERT INTO shopping_items (family_id, user_id, text, created_at)
+                VALUES (?, ?, ?, ?)
+            ''', (item['family_id'], user_id, item['text'], item['created_at']))
+
+            # Удаляем из архива
+            cursor.execute('DELETE FROM archive_items WHERE id = ?', (item_id,))
+
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"Ошибка restore_from_archive: {e}")
+        conn.rollback()
+        return False
     # ===== ШАБЛОНЫ И СТАТИСТИКА =====
 
     def get_family_templates(self, family_id: int):
@@ -785,17 +821,19 @@ def get_main_keyboard(family_id: int = None, is_admin: bool = False):
     return InlineKeyboardMarkup(buttons)
 
 def get_list_keyboard(items):
-    """Клавиатура для списка покупок (с кнопками купить/удалить на отдельных строках)"""
+    """Клавиатура для списка покупок (с кнопками купить/удалить в одной строке)"""
     keyboard = []
     for item in items:
         if len(item) >= 4:
             item_id, text, created_at, user_name = item
-            btn_text = text[:20] if len(text) <= 20 else f"{text[:17]}..."
+            # Укороченный текст для кнопки
+            btn_text = text[:18] if len(text) <= 18 else f"{text[:15]}..."
             
-            # Кнопка "Купить" на отдельной строке
-            keyboard.append([InlineKeyboardButton(f"✅ {btn_text}", callback_data=f"buy_{item_id}")])
-            # Кнопка "Удалить" на отдельной строке (занимает всю ширину)
-            keyboard.append([InlineKeyboardButton("🗑️ Удалить", callback_data=f"ask_delete_{item_id}")])
+            # ✅ Кнопка "Купить" (большая, ~3/4 ширины) и 🗑️ Кнопка "Удалить" (маленькая, ~1/4 ширины)
+            keyboard.append([
+                InlineKeyboardButton(f"✅ {btn_text}", callback_data=f"buy_{item_id}"),
+                InlineKeyboardButton("🗑️", callback_data=f"ask_delete_{item_id}")
+            ])
     
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_main")])
     return InlineKeyboardMarkup(keyboard)
@@ -1350,13 +1388,40 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=get_back_keyboard()
             )
 
-    elif data.startswith("restore_archive_"):
-        if not family_id:
-            return
+  elif data.startswith("restore_archive_"):
+    if not family_id:
+        return
 
-        item_id = int(data.split("_")[2])
-        # Временно отключаем восстановление из архива
-        await query.answer("❌ Восстановление временно отключено", show_alert=True)
+    item_id = int(data.split("_")[2])
+    success = db.restore_from_archive(item_id, user_id)
+
+    if success:
+        await query.answer("✅ Товар возвращен в список покупок", show_alert=True)
+        
+        # Обновляем список архива
+        items = db.get_archive_items_with_users(family_id, 20)
+        if items:
+            text = "🛒 *Купленные товары:*\n\n"
+            for i, item in enumerate(items, 1):
+                if len(item) >= 6:
+                    item_id, item_text, bought_at, created_at, bought_by, added_by = item
+                    time_str = format_time(bought_at)
+                    text += f"{i}. {format_item_text(item_text)}\n   👤 {added_by} → {bought_by}, {time_str}\n"
+
+            await query.edit_message_text(
+                text,
+                parse_mode='Markdown',
+                reply_markup=get_archive_keyboard(items, is_admin)
+            )
+        else:
+            await query.edit_message_text(
+                "🛒 *Купленные товары*\n\n"
+                "Здесь появятся товары, которые вы отметите как купленные.",
+                parse_mode='Markdown',
+                reply_markup=get_back_keyboard()
+            )
+    else:
+        await query.answer("❌ Ошибка при восстановлении товара", show_alert=True)
 
     elif data == "show_stats":
         if not family_id:
