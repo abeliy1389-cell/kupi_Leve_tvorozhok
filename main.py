@@ -24,9 +24,9 @@ DB_NAME = 'family_shopping_v2.db'
 # Константы
 TEMPLATES_COUNT = 4
 DEFAULT_TEMPLATES = ['Хлеб', 'Молоко', 'Творожок гугу', 'Сыр']
-THANK_YOU_PHRASES = ["Куплено!", "Вычёркиваем!", "Это пригодится!", "Покушаем...", 
+THANK_YOU_PHRASES = ["Куплено!", "Вычёркиваем!", "Это пригодится!", "Похаем...", 
                      "Из этого что-то можно приготовить...", "Спасибо, дорогой! 🙏", 
-                     "Отлично! Так держать! 👍", "Супер! Будет, что поесть! 🎉"]
+                     "Отлично! Так держать! 👍", "Супер !Будет, что поесть! 🎉"]
 MOSCOW_TZ_OFFSET = timedelta(hours=3)  # UTC+3
 
 # Состояния для ConversationHandler
@@ -102,7 +102,7 @@ def get_recent_activities_text(family_id: int) -> str:
     text = "\n\n🕐 *Последние действия:*\n"
     for i, activity in enumerate(recent, 1):
         # Определяем эмодзи в зависимости от типа действия
-        emoji = "✅" if activity['type'] == 'bought' else "✏️"
+        emoji = "🛒" if activity['type'] == 'bought' else "➕"
         
         # Форматируем строку в новом формате
         text += f"{i}. {activity['user_name']} {emoji} {format_item_text(activity['text'])}, {activity['time']}\n"
@@ -510,43 +510,42 @@ class Database:
         except Exception as e:
             logger.error(f"Ошибка delete_item_permanently: {e}")
             return False
-# БЫЛО (после delete_item_permanently ничего нет или другая функция)
-# ДОБАВЬТЕ ЭТУ НОВУЮ ФУНКЦИЮ:
 
-def restore_from_archive(self, item_id: int, user_id: int) -> bool:
-    """Восстанавливает товар из архива"""
-    try:
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('BEGIN TRANSACTION')
+    def restore_from_archive(self, item_id: int, user_id: int) -> bool:
+        """Восстанавливает товар из архива"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('BEGIN TRANSACTION')
 
-            # Получаем данные из архива
-            cursor.execute('''
-                SELECT ai.family_id, ai.added_by_user_id, ai.text, ai.created_at
-                FROM archive_items ai
-                WHERE ai.id = ?
-            ''', (item_id,))
-            item = cursor.fetchone()
+                # Получаем данные из архива
+                cursor.execute('''
+                    SELECT ai.family_id, ai.added_by_user_id, ai.text, ai.created_at
+                    FROM archive_items ai
+                    WHERE ai.id = ?
+                ''', (item_id,))
+                item = cursor.fetchone()
 
-            if not item:
-                conn.rollback()
-                return False
+                if not item:
+                    conn.rollback()
+                    return False
 
-            # Добавляем обратно в активные
-            cursor.execute('''
-                INSERT INTO shopping_items (family_id, user_id, text, created_at)
-                VALUES (?, ?, ?, ?)
-            ''', (item['family_id'], user_id, item['text'], item['created_at']))
+                # Добавляем обратно в активные
+                cursor.execute('''
+                    INSERT INTO shopping_items (family_id, user_id, text, created_at)
+                    VALUES (?, ?, ?, ?)
+                ''', (item['family_id'], user_id, item['text'], item['created_at']))
 
-            # Удаляем из архива
-            cursor.execute('DELETE FROM archive_items WHERE id = ?', (item_id,))
+                # Удаляем из архива
+                cursor.execute('DELETE FROM archive_items WHERE id = ?', (item_id,))
 
-            conn.commit()
-            return True
-    except Exception as e:
-        logger.error(f"Ошибка restore_from_archive: {e}")
-        conn.rollback()
-        return False
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Ошибка restore_from_archive: {e}")
+            conn.rollback()
+            return False
+
     # ===== ШАБЛОНЫ И СТАТИСТИКА =====
 
     def get_family_templates(self, family_id: int):
@@ -1388,40 +1387,40 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=get_back_keyboard()
             )
 
-  elif data.startswith("restore_archive_"):
-    if not family_id:
-        return
+    elif data.startswith("restore_archive_"):
+        if not family_id:
+            return
 
-    item_id = int(data.split("_")[2])
-    success = db.restore_from_archive(item_id, user_id)
+        item_id = int(data.split("_")[2])
+        success = db.restore_from_archive(item_id, user_id)
 
-    if success:
-        await query.answer("✅ Товар возвращен в список покупок", show_alert=True)
-        
-        # Обновляем список архива
-        items = db.get_archive_items_with_users(family_id, 20)
-        if items:
-            text = "🛒 *Купленные товары:*\n\n"
-            for i, item in enumerate(items, 1):
-                if len(item) >= 6:
-                    item_id, item_text, bought_at, created_at, bought_by, added_by = item
-                    time_str = format_time(bought_at)
-                    text += f"{i}. {format_item_text(item_text)}\n   👤 {added_by} → {bought_by}, {time_str}\n"
+        if success:
+            await query.answer("✅ Товар возвращен в список покупок", show_alert=True)
+            
+            # Обновляем список архива
+            items = db.get_archive_items_with_users(family_id, 20)
+            if items:
+                text = "🛒 *Купленные товары:*\n\n"
+                for i, item in enumerate(items, 1):
+                    if len(item) >= 6:
+                        item_id, item_text, bought_at, created_at, bought_by, added_by = item
+                        time_str = format_time(bought_at)
+                        text += f"{i}. {format_item_text(item_text)}\n   👤 {added_by} → {bought_by}, {time_str}\n"
 
-            await query.edit_message_text(
-                text,
-                parse_mode='Markdown',
-                reply_markup=get_archive_keyboard(items, is_admin)
-            )
+                await query.edit_message_text(
+                    text,
+                    parse_mode='Markdown',
+                    reply_markup=get_archive_keyboard(items, is_admin)
+                )
+            else:
+                await query.edit_message_text(
+                    "🛒 *Купленные товары*\n\n"
+                    "Здесь появятся товары, которые вы отметите как купленные.",
+                    parse_mode='Markdown',
+                    reply_markup=get_back_keyboard()
+                )
         else:
-            await query.edit_message_text(
-                "🛒 *Купленные товары*\n\n"
-                "Здесь появятся товары, которые вы отметите как купленные.",
-                parse_mode='Markdown',
-                reply_markup=get_back_keyboard()
-            )
-    else:
-        await query.answer("❌ Ошибка при восстановлении товара", show_alert=True)
+            await query.answer("❌ Ошибка при восстановлении товара", show_alert=True)
 
     elif data == "show_stats":
         if not family_id:
@@ -1763,13 +1762,10 @@ def main():
     print("5. ✅ Регистронезависимость через COLLATE NOCASE")
     print("6. ✅ Новое приветствие без аннотаций + последние 5 действий")
     print("7. ✅ Убрана корзина (удаление навсегда с подтверждением)")
-    print("8. ✅ Кнопка удаления на отдельной строке (занимает 100% ширины)")
+    print("8. ✅ Кнопка удаления в одной строке с кнопкой купить")
+    print("9. ✅ Восстановление из архива работает")
+    print("10.✅ Новый формат последних действий")
     print("="*60)
-
-    if "ВАШ_ТОКЕН_ЗДЕСЬ" in BOT_TOKEN:
-        print("⚠️  ВНИМАНИЕ: Замените BOT_TOKEN на ваш реальный токен!")
-        print("Или установите переменную окружения TELEGRAM_BOT_TOKEN")
-        print("="*60)
 
     try:
         # Создаем Application
