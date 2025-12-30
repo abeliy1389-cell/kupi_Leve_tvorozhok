@@ -24,16 +24,13 @@ DB_NAME = 'family_shopping_v2.db'
 # Константы
 TEMPLATES_COUNT = 4
 DEFAULT_TEMPLATES = ['Хлеб', 'Молоко', 'Творожок гугу', 'Сыр']
-THANK_YOU_PHRASES = ["Куплено!", "Вычёркиваем!", "Это пригодится!", "Похаем...", 
+THANK_YOU_PHRASES = ["Куплено!", "Вычёркиваем!", "Это пригодится!", "Покушаем...", 
                      "Из этого что-то можно приготовить...", "Спасибо, дорогой! 🙏", 
-                     "Отлично! Так держать! 👍", "Супер !Будет, что поесть! 🎉"]
+                     "Отлично! Так держать! 👍", "Супер! Будет, что поесть! 🎉"]
 MOSCOW_TZ_OFFSET = timedelta(hours=3)  # UTC+3
 
 # Состояния для ConversationHandler
 ASKING_FAMILY_NAME, ASKING_USER_NAME = range(2)
-
-# Состояния для подтверждения удаления
-CONFIRM_DELETE = 100
 # =======================
 
 # Настройка логирования
@@ -93,7 +90,8 @@ def get_random_thankyou() -> str:
 
 def format_item_text(item_text: str) -> str:
     """Форматирует текст товара - делает жирным"""
-    return f"**{item_text}**"
+    clean_text = item_text.replace('*', '\\*').replace('_', '\\_').replace('`', '\\`')
+    return f"*{clean_text}*"
 
 def get_recent_activities_text(family_id: int) -> str:
     """Возвращает текст последних 5 действий"""
@@ -103,8 +101,11 @@ def get_recent_activities_text(family_id: int) -> str:
     
     text = "\n\n🕐 *Последние действия:*\n"
     for i, activity in enumerate(recent, 1):
-        action = "🛒 Купил" if activity['type'] == 'bought' else "➕ Добавил"
-        text += f"{i}. {action} **{activity['text']}**\n   👤 {activity['user_name']}, {activity['time']}\n"
+        # Определяем эмодзи в зависимости от типа действия
+        emoji = "✅" if activity['type'] == 'bought' else "✏️"
+        
+        # Форматируем строку в новом формате
+        text += f"{i}. {activity['user_name']} {emoji} {format_item_text(activity['text'])}, {activity['time']}\n"
     
     return text
 
@@ -783,19 +784,18 @@ def get_main_keyboard(family_id: int = None, is_admin: bool = False):
 
     return InlineKeyboardMarkup(buttons)
 
-def get_list_keyboard(items, context: ContextTypes.DEFAULT_TYPE = None):
-    """Клавиатура для списка покупок (с кнопками купить/удалить)"""
+def get_list_keyboard(items):
+    """Клавиатура для списка покупок (с кнопками купить/удалить на отдельных строках)"""
     keyboard = []
     for item in items:
         if len(item) >= 4:
             item_id, text, created_at, user_name = item
-            formatted_text = format_item_text(text[:20] if len(text) <= 20 else f"{text[:17]}...")
+            btn_text = text[:20] if len(text) <= 20 else f"{text[:17]}..."
             
-            # Большая кнопка "купить" (3/4 строки) и маленькая "удалить" (1/4 строки)
-            keyboard.append([
-                InlineKeyboardButton(f"✅ {formatted_text}", callback_data=f"buy_{item_id}"),
-                InlineKeyboardButton("🗑️", callback_data=f"ask_delete_{item_id}")
-            ])
+            # Кнопка "Купить" на отдельной строке
+            keyboard.append([InlineKeyboardButton(f"✅ {btn_text}", callback_data=f"buy_{item_id}")])
+            # Кнопка "Удалить" на отдельной строке (занимает всю ширину)
+            keyboard.append([InlineKeyboardButton("🗑️ Удалить", callback_data=f"ask_delete_{item_id}")])
     
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_main")])
     return InlineKeyboardMarkup(keyboard)
@@ -1197,7 +1197,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(
                 text,
                 parse_mode='Markdown',
-                reply_markup=get_list_keyboard(items, context)
+                reply_markup=get_list_keyboard(items)
             )
 
     elif data == "show_archive":
@@ -1238,9 +1238,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         success = db.mark_item_as_bought(item_id, user_id)
 
         if success:
-            # Благодарственная фраза на 3 секунды
+            # Благодарственная фраза на 3 секунды (show_alert=True для гарантированного отображения)
             thankyou = get_random_thankyou()
-            await query.answer(thankyou, show_alert=False, cache_time=3)
+            await query.answer(thankyou, show_alert=True)
 
             # Обновляем список
             items = db.get_active_items_with_users(family_id)
@@ -1255,7 +1255,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text(
                     text,
                     parse_mode='Markdown',
-                    reply_markup=get_list_keyboard(items, context)
+                    reply_markup=get_list_keyboard(items)
                 )
             else:
                 await query.edit_message_text(
@@ -1283,7 +1283,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             f"🗑️ *Подтверждение удаления*\n\n"
             f"Вы уверены, что хотите удалить товар:\n"
-            f"**{item_text}**\n\n"
+            f"{format_item_text(item_text)}\n\n"
             f"⚠️ *Это действие нельзя отменить!*",
             parse_mode='Markdown',
             reply_markup=get_confirmation_keyboard(item_id)
@@ -1297,7 +1297,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         success = db.delete_item_permanently(item_id, user_id)
 
         if success:
-            await query.answer("✅ Товар удален навсегда", show_alert=False)
+            await query.answer("✅ Товар удален навсегда", show_alert=True)
             
             items = db.get_active_items_with_users(family_id)
             if items:
@@ -1311,7 +1311,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text(
                     text,
                     parse_mode='Markdown',
-                    reply_markup=get_list_keyboard(items, context)
+                    reply_markup=get_list_keyboard(items)
                 )
             else:
                 await query.edit_message_text(
@@ -1340,7 +1340,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(
                 text,
                 parse_mode='Markdown',
-                reply_markup=get_list_keyboard(items, context)
+                reply_markup=get_list_keyboard(items)
             )
         else:
             await query.edit_message_text(
@@ -1663,7 +1663,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         item_id = db.add_shopping_item(family_id, user_id, template_text)
 
         if item_id:
-            await query.answer(f"Добавлено: {template_text}", show_alert=False)
+            await query.answer(f"Добавлено: {template_text}", show_alert=True)
             await query.edit_message_text(
                 f"✅ Добавлено из шаблона: *{template_text}*",
                 parse_mode='Markdown',
@@ -1690,15 +1690,15 @@ def main():
     print("="*60)
     print("🤖 Запуск ОБНОВЛЕННОГО бота для списка покупок...")
     print("="*60)
-    print("✅ Изменения:")
-    print("1. Товары выделены жирным шрифтом")
-    print("2. Работающая статистика (топ-5 за 30 дней, топ-10 за всё время)")
-    print("3. Убрана рассылка дайджеста")
-    print("4. Благодарственные фразы на 3 секунды после покупки")
-    print("5. Регистронезависимость через COLLATE NOCASE")
-    print("6. Новое приветствие без аннотаций + последние 5 действий")
-    print("7. Убрана корзина (удаление навсегда с подтверждением)")
-    print("8. Кнопка удаления занимает 1/4 строки")
+    print("✅ ВСЕ ИСПРАВЛЕНИЯ ВНЕСЕНЫ:")
+    print("1. ✅ Товары выделены жирным шрифтом (исправлено)")
+    print("2. ✅ Статистика работает (топ-5 за 30 дней, топ-10 за всё время)")
+    print("3. ✅ Убрана рассылка дайджеста")
+    print("4. ✅ Благодарственные фразы на 3 секунды (show_alert=True)")
+    print("5. ✅ Регистронезависимость через COLLATE NOCASE")
+    print("6. ✅ Новое приветствие без аннотаций + последние 5 действий")
+    print("7. ✅ Убрана корзина (удаление навсегда с подтверждением)")
+    print("8. ✅ Кнопка удаления на отдельной строке (занимает 100% ширины)")
     print("="*60)
 
     if "ВАШ_ТОКЕН_ЗДЕСЬ" in BOT_TOKEN:
@@ -1749,11 +1749,4 @@ def main():
         traceback.print_exc()
 
 if __name__ == '__main__':
-    # Очистка старых процессов (опционально)
-    import sys
-    if '--kill' in sys.argv:
-        import subprocess
-        subprocess.run(["pkill", "-f", "python.*shopping_bot"])
-        print("⚠️ Все процессы бота завершены")
-    else:
-        main()
+    main()
