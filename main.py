@@ -18,7 +18,7 @@ from telegram.ext import (
 # ====================
 
 # ===== КОНФИГУРАЦИЯ =====
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8307261021:AAGCawbFqDzd9osxDOCeUHNRE0G5GaeJKJs")
+BOT_TOKEN = "8307261021:AAGCawbFqDzd9osxDOCeUHNRE0G5GaeJKJs"
 DB_NAME = 'family_shopping_v2.db'
 
 # Константы
