@@ -102,7 +102,7 @@ def get_recent_activities_text(family_id: int) -> str:
     text = "\n\n🕐 *Последние действия:*\n"
     for i, activity in enumerate(recent, 1):
         # Определяем эмодзи в зависимости от типа действия
-        emoji = "🛒" if activity['type'] == 'bought' else "➕"
+        emoji = "✅" if activity['type'] == 'bought' else "✏️"
         
         # Форматируем строку в новом формате
         text += f"{i}. {activity['user_name']} {emoji} {format_item_text(activity['text'])}, {activity['time']}\n"
