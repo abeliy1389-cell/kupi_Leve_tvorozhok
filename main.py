@@ -546,7 +546,7 @@ class Database:
             conn.rollback()
             return False
 
-    # ===== ШАБЛОНЫ И СТАТИСТИКА =====
+    # ===== ШАБЛОНЫ =====
 
     def get_family_templates(self, family_id: int):
         """Получает шаблоны для семьи с учетом регистронезависимости"""
@@ -575,139 +575,6 @@ class Database:
         except Exception as e:
             logger.error(f"Ошибка get_family_templates: {e}")
             return DEFAULT_TEMPLATES
-
-    def get_monthly_stats(self, family_id: int, year: int, month: int):
-        """Получает статистику за конкретный месяц"""
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                
-                # Определяем диапазон дат для месяца
-                start_date = f"{year:04d}-{month:02d}-01"
-                if month == 12:
-                    end_date = f"{year+1:04d}-01-01"
-                else:
-                    end_date = f"{year:04d}-{month+1:02d}-01"
-
-                # Топ-5 товаров за месяц (регистронезависимо)
-                cursor.execute('''
-                    SELECT LOWER(text) as normalized_text, COUNT(*) as count
-                    FROM archive_items
-                    WHERE family_id = ?
-                      AND bought_at >= ? AND bought_at < ?
-                    GROUP BY normalized_text
-                    ORDER BY count DESC
-                    LIMIT 5
-                ''', (family_id, start_date, end_date))
-                top_items_month = cursor.fetchall()
-
-                # Статистика пользователей за месяц
-                cursor.execute('''
-                    SELECT u.family_display_name,
-                           SUM(CASE WHEN ai.user_id = u.id THEN 1 ELSE 0 END) as bought_count,
-                           SUM(CASE WHEN ai.added_by_user_id = u.id THEN 1 ELSE 0 END) as added_count
-                    FROM archive_items ai
-                    JOIN users u ON ai.family_id = u.family_id
-                    WHERE ai.family_id = ?
-                      AND ai.bought_at >= ? AND ai.bought_at < ?
-                    GROUP BY u.id, u.family_display_name
-                    ORDER BY bought_count DESC
-                ''', (family_id, start_date, end_date))
-                user_stats_month = cursor.fetchall()
-
-                # Общая статистика за месяц
-                cursor.execute('''
-                    SELECT
-                        COUNT(*) as total_items,
-                        COUNT(DISTINCT user_id) as unique_buyers,
-                        COUNT(DISTINCT LOWER(text)) as unique_items
-                    FROM archive_items
-                    WHERE family_id = ?
-                      AND bought_at >= ? AND bought_at < ?
-                ''', (family_id, start_date, end_date))
-                total_month = cursor.fetchone()
-
-                return {
-                    'top_items_month': [dict(row) for row in top_items_month],
-                    'user_stats_month': [dict(row) for row in user_stats_month],
-                    'total_items': total_month['total_items'] if total_month else 0,
-                    'unique_buyers': total_month['unique_buyers'] if total_month else 0,
-                    'unique_items': total_month['unique_items'] if total_month else 0,
-                    'month': f"{month:02d}.{year:04d}"
-                }
-        except Exception as e:
-            logger.error(f"Ошибка get_monthly_stats: {e}")
-            return {
-                'top_items_month': [],
-                'user_stats_month': [],
-                'total_items': 0,
-                'unique_buyers': 0,
-                'unique_items': 0,
-                'month': f"{month:02d}.{year:04d}"
-            }
-
-    def get_all_time_stats(self, family_id: int):
-        """Получает общую статистику за все время"""
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-
-                # Топ-10 товаров за все время (регистронезависимо)
-                cursor.execute('''
-                    SELECT LOWER(text) as normalized_text, COUNT(*) as count
-                    FROM archive_items
-                    WHERE family_id = ?
-                    GROUP BY normalized_text
-                    ORDER BY count DESC
-                    LIMIT 10
-                ''', (family_id,))
-                top_items_all_time = cursor.fetchall()
-
-                # Статистика пользователей за все время
-                cursor.execute('''
-                    SELECT u.family_display_name,
-                           SUM(CASE WHEN ai.user_id = u.id THEN 1 ELSE 0 END) as bought_count,
-                           SUM(CASE WHEN ai.added_by_user_id = u.id THEN 1 ELSE 0 END) as added_count,
-                           SUM(CASE WHEN si.user_id = u.id THEN 1 ELSE 0 END) as currently_added
-                    FROM users u
-                    LEFT JOIN archive_items ai ON u.id = ai.user_id OR u.id = ai.added_by_user_id
-                    LEFT JOIN shopping_items si ON u.id = si.user_id AND si.is_active = TRUE
-                    WHERE u.family_id = ?
-                    GROUP BY u.id, u.family_display_name
-                    ORDER BY bought_count DESC
-                ''', (family_id,))
-                user_stats_all_time = cursor.fetchall()
-
-                # Активные товары
-                cursor.execute('''
-                    SELECT COUNT(*) as active_items
-                    FROM shopping_items
-                    WHERE family_id = ? AND is_active = TRUE
-                ''', (family_id,))
-                active = cursor.fetchone()
-
-                # Купленные товары
-                cursor.execute('''
-                    SELECT COUNT(*) as bought_items
-                    FROM archive_items
-                    WHERE family_id = ?
-                ''', (family_id,))
-                bought = cursor.fetchone()
-
-                return {
-                    'top_items_all_time': [dict(row) for row in top_items_all_time],
-                    'user_stats_all_time': [dict(row) for row in user_stats_all_time],
-                    'active_items': active['active_items'] if active else 0,
-                    'bought_items': bought['bought_items'] if bought else 0
-                }
-        except Exception as e:
-            logger.error(f"Ошибка get_all_time_stats: {e}")
-            return {
-                'top_items_all_time': [],
-                'user_stats_all_time': [],
-                'active_items': 0,
-                'bought_items': 0
-            }
 
     def get_recent_activities(self, family_id: int, limit: int = 5):
         """Получает последние 5 действий (добавления и покупки)"""
@@ -806,11 +673,10 @@ def get_main_keyboard(family_id: int = None, is_admin: bool = False):
                 if row:
                     buttons.append(row)
 
-    # Основные кнопки - БЕЗ корзины
+    # Основные кнопки - БЕЗ статистики
     buttons.extend([
         [InlineKeyboardButton("📃 Список покупок", callback_data="show_list")],
-        [InlineKeyboardButton("🛒 Купленные товары", callback_data="show_archive")],
-        [InlineKeyboardButton("📊 Статистика", callback_data="show_stats")]
+        [InlineKeyboardButton("🛒 Купленные товары", callback_data="show_archive")]
     ])
 
     # Админ кнопки
@@ -1422,65 +1288,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("❌ Ошибка при восстановлении товара", show_alert=True)
 
-    elif data == "show_stats":
-        if not family_id:
-            await query.edit_message_text(
-                "У вас нет семьи. Используйте /start",
-                reply_markup=get_back_keyboard()
-            )
-            return
-
-        # Статистика за последние 30 дней
-        now_msk = get_moscow_time()
-        thirty_days_ago = now_msk - timedelta(days=30)
-        stats_30_days = db.get_monthly_stats(family_id, thirty_days_ago.year, thirty_days_ago.month)
-        
-        # Общая статистика за все время
-        all_time_stats = db.get_all_time_stats(family_id)
-
-        text = f"📊 *Статистика покупок*\n\n"
-        
-        # За последние 30 дней
-        text += f"*📅 За последние 30 дней:*\n"
-        if stats_30_days['total_items'] > 0:
-            text += f"Всего куплено: *{stats_30_days['total_items']}*\n"
-            text += f"Покупателей: *{stats_30_days['unique_buyers']}*\n"
-            text += f"Уникальных товаров: *{stats_30_days['unique_items']}*\n\n"
-            
-            if stats_30_days['top_items_month']:
-                text += "*Топ-5 товаров за 30 дней:*\n"
-                for i, item_stat in enumerate(stats_30_days['top_items_month'][:5], 1):
-                    text += f"{i}. {item_stat['normalized_text'].capitalize()}: {item_stat['count']}\n"
-            
-            if stats_30_days['user_stats_month']:
-                text += "\n*Активность за 30 дней:*\n"
-                for i, user_stat in enumerate(stats_30_days['user_stats_month'][:5], 1):
-                    text += f"{i}. {user_stat['family_display_name']}: добавил {user_stat['added_count']}, купил {user_stat['bought_count']}\n"
-        else:
-            text += "Покупок не было\n\n"
-        
-        # За все время
-        text += f"\n---\n*📈 За все время:*\n"
-        text += f"Активных товаров: *{all_time_stats['active_items']}*\n"
-        text += f"Всего куплено: *{all_time_stats['bought_items']}*\n\n"
-        
-        if all_time_stats['top_items_all_time']:
-            text += "*Топ-10 товаров за все время:*\n"
-            for i, item_stat in enumerate(all_time_stats['top_items_all_time'][:10], 1):
-                text += f"{i}. {item_stat['normalized_text'].capitalize()}: {item_stat['count']}\n"
-        
-        if all_time_stats['user_stats_all_time']:
-            text += "\n*Общая активность:*\n"
-            for i, user_stat in enumerate(all_time_stats['user_stats_all_time'][:5], 1):
-                current = user_stat['currently_added'] or 0
-                text += f"{i}. {user_stat['family_display_name']}: добавил {user_stat['added_count']}, купил {user_stat['bought_count']}, сейчас в списке: {current}\n"
-
-        await query.edit_message_text(
-            text,
-            parse_mode='Markdown',
-            reply_markup=get_back_keyboard()
-        )
-
     elif data == "admin_panel":
         if not family_id or not is_admin:
             await query.answer("Только для администраторов!", show_alert=True)
@@ -1755,8 +1562,8 @@ def main():
     print("🤖 Запуск ОБНОВЛЕННОГО бота для списка покупок...")
     print("="*60)
     print("✅ ВСЕ ИСПРАВЛЕНИЯ ВНЕСЕНЫ:")
-    print("1. ✅ Товары выделены жирным шрифтом (исправлено)")
-    print("2. ✅ Статистика работает (топ-5 за 30 дней, топ-10 за всё время)")
+    print("1. ✅ Товары выделены жирным шрифтом")
+    print("2. ✅ Статистика ПОЛНОСТЬЮ УДАЛЕНА")
     print("3. ✅ Убрана рассылка дайджеста")
     print("4. ✅ Благодарственные фразы на 3 секунды (show_alert=True)")
     print("5. ✅ Регистронезависимость через COLLATE NOCASE")
