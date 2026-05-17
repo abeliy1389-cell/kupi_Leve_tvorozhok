@@ -3,7 +3,6 @@ import logging
 import sqlite3
 import uuid
 import random
-import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, List, Tuple, Dict, Any
 from contextlib import contextmanager
@@ -53,10 +52,8 @@ def format_time(dt_str: str) -> str:
     if not dt_str:
         return "давно"
     try:
-        # Преобразуем из UTC в MSK
         dt_utc = datetime.strptime(dt_str[:19], "%Y-%m-%d %H:%M:%S")
         dt = get_moscow_time(dt_utc)
-
         now_msk = get_moscow_time()
         today_msk = now_msk.date()
 
@@ -66,7 +63,6 @@ def format_time(dt_str: str) -> str:
             return f"вчера {dt.strftime('%H:%M')}"
         elif (today_msk - dt.date()).days < 7:
             days = (today_msk - dt.date()).days
-            # Правильное склонение
             if days == 1:
                 return "вчера"
             elif days == 2:
@@ -81,8 +77,7 @@ def format_time(dt_str: str) -> str:
 
 def split_multiline_items(text: str) -> List[str]:
     """Разделяет многострочный текст на отдельные товары"""
-    items = [line.strip() for line in text.split('\n') if line.strip()]
-    return items
+    return [line.strip() for line in text.split('\n') if line.strip()]
 
 def get_random_thankyou() -> str:
     """Возвращает случайную благодарность"""
@@ -101,10 +96,7 @@ def get_recent_activities_text(family_id: int) -> str:
     
     text = "\n\n🕐 *Последние действия:*\n"
     for i, activity in enumerate(recent, 1):
-        # Определяем эмодзи в зависимости от типа действия
         emoji = "✅" if activity['type'] == 'bought' else "✏️"
-        
-        # Форматируем строку в новом формате
         text += f"{i}. {activity['user_name']} {emoji} {format_item_text(activity['text'])}, {activity['time']}\n"
     
     return text
@@ -355,7 +347,6 @@ class Database:
                 cursor = conn.cursor()
                 cursor.execute('BEGIN TRANSACTION')
                 
-                # Проверяем, что from_user_id действительно админ
                 cursor.execute(
                     'SELECT is_admin FROM users WHERE id = ? AND family_id = ?',
                     (from_user_id, family_id)
@@ -366,23 +357,18 @@ class Database:
                     conn.rollback()
                     return False
 
-                # Снимаем права у старого админа
                 cursor.execute(
                     'UPDATE users SET is_admin = FALSE WHERE id = ? AND family_id = ?',
                     (from_user_id, family_id)
                 )
-
-                # Даем права новому админу
                 cursor.execute(
                     'UPDATE users SET is_admin = TRUE WHERE id = ? AND family_id = ?',
                     (to_user_id, family_id)
                 )
-
                 conn.commit()
                 return True
         except Exception as e:
             logger.error(f"Ошибка transfer_admin_rights: {e}")
-            conn.rollback()
             return False
 
     # ===== ТОВАРЫ =====
@@ -468,7 +454,6 @@ class Database:
                 cursor = conn.cursor()
                 cursor.execute('BEGIN TRANSACTION')
 
-                # Получаем данные товара
                 cursor.execute('''
                     SELECT si.id, si.family_id, si.user_id, si.text, si.created_at
                     FROM shopping_items si
@@ -480,20 +465,15 @@ class Database:
                     conn.rollback()
                     return False
 
-                # Добавляем в архив
                 cursor.execute('''
                     INSERT INTO archive_items (family_id, user_id, added_by_user_id, text, created_at)
                     VALUES (?, ?, ?, ?, ?)
                 ''', (item['family_id'], user_id, item['user_id'], item['text'], item['created_at']))
-
-                # Удаляем из активных
                 cursor.execute('DELETE FROM shopping_items WHERE id = ?', (item_id,))
-
                 conn.commit()
                 return True
         except Exception as e:
             logger.error(f"Ошибка mark_item_as_bought: {e}")
-            conn.rollback()
             return False
 
     def delete_item_permanently(self, item_id: int, user_id: int) -> bool:
@@ -501,10 +481,7 @@ class Database:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    'DELETE FROM shopping_items WHERE id = ?',
-                    (item_id,)
-                )
+                cursor.execute('DELETE FROM shopping_items WHERE id = ?', (item_id,))
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:
@@ -518,7 +495,6 @@ class Database:
                 cursor = conn.cursor()
                 cursor.execute('BEGIN TRANSACTION')
 
-                # Получаем данные из архива
                 cursor.execute('''
                     SELECT ai.family_id, ai.added_by_user_id, ai.text, ai.created_at
                     FROM archive_items ai
@@ -530,26 +506,21 @@ class Database:
                     conn.rollback()
                     return False
 
-                # Добавляем обратно в активные
                 cursor.execute('''
                     INSERT INTO shopping_items (family_id, user_id, text, created_at)
                     VALUES (?, ?, ?, ?)
                 ''', (item['family_id'], user_id, item['text'], item['created_at']))
-
-                # Удаляем из архива
                 cursor.execute('DELETE FROM archive_items WHERE id = ?', (item_id,))
-
                 conn.commit()
                 return True
         except Exception as e:
             logger.error(f"Ошибка restore_from_archive: {e}")
-            conn.rollback()
             return False
 
     # ===== ШАБЛОНЫ =====
 
     def get_family_templates(self, family_id: int):
-        """Получает шаблоны для семьи с учетом регистронезависимости"""
+        """Получает шаблоны для семьи"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
@@ -564,7 +535,6 @@ class Database:
                 if results:
                     return [r['item_text'] for r in results]
                 else:
-                    # Добавляем дефолтные шаблоны
                     for template in DEFAULT_TEMPLATES:
                         cursor.execute('''
                             INSERT OR IGNORE INTO templates (family_id, item_text)
@@ -577,12 +547,11 @@ class Database:
             return DEFAULT_TEMPLATES
 
     def get_recent_activities(self, family_id: int, limit: int = 5):
-        """Получает последние 5 действий (добавления и покупки)"""
+        """Получает последние 5 действий"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 
-                # Получаем последние покупки
                 cursor.execute('''
                     SELECT ai.text, ai.bought_at as action_time, 
                            u1.family_display_name as user_name, 'bought' as type
@@ -592,10 +561,8 @@ class Database:
                     ORDER BY ai.bought_at DESC
                     LIMIT ?
                 ''', (family_id, limit))
-                
                 bought_activities = cursor.fetchall()
                 
-                # Получаем последние добавления активных товаров
                 cursor.execute('''
                     SELECT si.text, si.created_at as action_time,
                            u.family_display_name as user_name, 'added' as type
@@ -605,10 +572,8 @@ class Database:
                     ORDER BY si.created_at DESC
                     LIMIT ?
                 ''', (family_id, limit))
-                
                 added_activities = cursor.fetchall()
                 
-                # Объединяем и сортируем по времени
                 all_activities = []
                 for row in bought_activities:
                     all_activities.append({
@@ -628,7 +593,6 @@ class Database:
                         'timestamp': row['action_time']
                     })
                 
-                # Сортируем по времени и берем последние limit
                 all_activities.sort(key=lambda x: x['timestamp'], reverse=True)
                 return all_activities[:limit]
                 
@@ -641,10 +605,7 @@ class Database:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    'SELECT name FROM families WHERE id = ?',
-                    (family_id,)
-                )
+                cursor.execute('SELECT name FROM families WHERE id = ?', (family_id,))
                 result = cursor.fetchone()
                 return result['name'] if result else "Семья"
         except Exception as e:
@@ -656,10 +617,9 @@ db = Database()
 # ==================== КЛАВИАТУРЫ ====================
 
 def get_main_keyboard(family_id: int = None, is_admin: bool = False):
-    """Главное меню БЕЗ подсказок"""
+    """Главное меню"""
     buttons = []
 
-    # Шаблоны
     if family_id:
         templates = db.get_family_templates(family_id)
         if templates:
@@ -673,28 +633,23 @@ def get_main_keyboard(family_id: int = None, is_admin: bool = False):
                 if row:
                     buttons.append(row)
 
-    # Основные кнопки - БЕЗ статистики
     buttons.extend([
         [InlineKeyboardButton("📃 Список покупок", callback_data="show_list")],
         [InlineKeyboardButton("🛒 Купленные товары", callback_data="show_archive")]
     ])
 
-    # Админ кнопки
     if is_admin:
         buttons.append([InlineKeyboardButton("👑 Админ", callback_data="admin_panel")])
 
     return InlineKeyboardMarkup(buttons)
 
 def get_list_keyboard(items):
-    """Клавиатура для списка покупок (с кнопками купить/удалить в одной строке)"""
+    """Клавиатура для списка покупок"""
     keyboard = []
     for item in items:
         if len(item) >= 4:
             item_id, text, created_at, user_name = item
-            # Укороченный текст для кнопки
             btn_text = text[:18] if len(text) <= 18 else f"{text[:15]}..."
-            
-            # ✅ Кнопка "Купить" (большая, ~3/4 ширины) и 🗑️ Кнопка "Удалить" (маленькая, ~1/4 ширины)
             keyboard.append([
                 InlineKeyboardButton(f"✅ {btn_text}", callback_data=f"buy_{item_id}"),
                 InlineKeyboardButton("🗑️", callback_data=f"ask_delete_{item_id}")
@@ -713,7 +668,7 @@ def get_confirmation_keyboard(item_id: int):
     ])
 
 def get_archive_keyboard(items, is_admin: bool = False):
-    """Клавиатура для архива (купленные товары)"""
+    """Клавиатура для архива"""
     keyboard = []
     for item in items:
         if len(item) >= 6:
@@ -726,7 +681,7 @@ def get_archive_keyboard(items, is_admin: bool = False):
     return InlineKeyboardMarkup(keyboard)
 
 def get_admin_keyboard():
-    """Админ-панель БЕЗ рассылки дайджеста и очистки корзины"""
+    """Админ-панель"""
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("👪 Пригласить", callback_data="admin_invite")],
         [InlineKeyboardButton("✏️ Изменить название семьи", callback_data="admin_rename")],
@@ -790,13 +745,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         if family_id:
-            # Получаем название семьи
             family_name = db.get_family_name(family_id)
-            
-            # Получаем последние действия
             recent_activities_text = get_recent_activities_text(family_id)
             
-            # Новое приветствие БЕЗ подсказок
             welcome_text = f"👋 *{display_name}, добро пожаловать в семью {family_name}!*"
             welcome_text += recent_activities_text
             
@@ -806,7 +757,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='Markdown'
             )
         else:
-            # Нет семьи - предлагаем создать или присоединиться
             await update.message.reply_text(
                 f"Привет, {user.first_name}! 👋\n\n"
                 "У тебя пока нет семьи.\n"
@@ -820,21 +770,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка в start: {e}")
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик текстовых сообщений (обычные товары)"""
+    """Обработчик текстовых сообщений"""
     try:
         user = update.effective_user
         user_id, family_id, is_admin, display_name = db.get_or_create_user(user.id)
-
         text = update.message.text.strip()
 
-        # Проверяем, не команда ли это
         if text.startswith('/'):
             return
 
-        # Проверяем, ожидаем ли мы новое название семьи
         if context.user_data.get('awaiting_new_family_name'):
             new_name = text[:50]
-
             if not new_name:
                 await update.message.reply_text(
                     "Название не может быть пустым. Попробуйте еще раз:",
@@ -843,7 +789,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 return
 
             success = db.update_family_name(family_id, new_name)
-
             if success:
                 await update.message.reply_text(
                     f"✅ Название семьи изменено на: *{new_name}*",
@@ -855,24 +800,18 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     "❌ Ошибка при изменении названия.",
                     reply_markup=get_admin_keyboard()
                 )
-
             context.user_data.pop('awaiting_new_family_name', None)
             return
 
-        # Если пользователь не в семье, проверяем код приглашения
         if not family_id:
-            # Код приглашения должен быть 6-8 символов, буквы/цифры
             if len(text) in [6, 7, 8] and text.isalnum():
                 family = db.get_family_by_invite_code(text.upper())
                 if family:
                     family_id = family['id']
                     db.add_user_to_family(user_id, family_id)
-                    
-                    # Сохраняем family_id в context для следующего шага
                     context.user_data['joining_family_id'] = family_id
                     context.user_data['joining_family_name'] = family['name']
-
-                    # Запрашиваем имя для семьи
+                    
                     await update.message.reply_text(
                         f"✅ Вы присоединились к '{family['name']}'!\n\n"
                         "📝 *Введите ваше имя, которое будут видеть другие участники семьи:*\n"
@@ -890,7 +829,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     )
                     return ConversationHandler.END
             else:
-                # Не код приглашения и не в семье - просим создать семью
                 await update.message.reply_text(
                     "У вас еще нет семьи. Используйте /start чтобы создать семью или присоединиться.",
                     reply_markup=InlineKeyboardMarkup([
@@ -900,11 +838,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 )
             return ConversationHandler.END
 
-        # Если пользователь в семье - добавляем товар(ы)
         items = split_multiline_items(text)
-
         if len(items) == 1:
-            # Один товар
             item_id = db.add_shopping_item(family_id, user_id, items[0])
             if item_id:
                 await update.message.reply_text(
@@ -913,7 +848,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     reply_markup=get_main_keyboard(family_id, is_admin)
                 )
         elif len(items) > 1:
-            # Несколько товаров
             added_count = db.add_multiple_items(family_id, user_id, items)
             if added_count:
                 await update.message.reply_text(
@@ -930,41 +864,31 @@ async def ask_family_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Запрашивает название семьи"""
     query = update.callback_query
     await query.answer()
-
     await query.edit_message_text(
         "🏠 *Создание новой семьи*\n\n"
         "📝 Введите название для вашей семьи (до 50 символов):\n"
         "Пример: 'Семья Ивановых', 'Наша квартира', 'Комната 404'",
         parse_mode='Markdown'
     )
-
     return ASKING_FAMILY_NAME
 
 async def handle_family_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает ввод названия семьи (только для создания семьи)"""
+    """Обрабатывает ввод названия семьи"""
     family_name = update.message.text.strip()[:50]
-
     if not family_name:
-        await update.message.reply_text(
-            "Название не может быть пустым. Попробуйте еще раз:"
-        )
+        await update.message.reply_text("Название не может быть пустым. Попробуйте еще раз:")
         return ASKING_FAMILY_NAME
 
-    # Создаем семью
     user = update.effective_user
     user_id, _, _, _ = db.get_or_create_user(user.id)
-
     family_id, invite_code = db.create_family(family_name)
 
     if family_id:
-        # Сохраняем данные в context для следующего шага
         context.user_data['new_family_id'] = family_id
         context.user_data['new_family_name'] = family_name
         context.user_data['new_invite_code'] = invite_code
-        
-        # Делаем пользователя админом
         db.add_user_to_family(user_id, family_id, is_admin=True)
-
+        
         await update.message.reply_text(
             f"✅ Семья '{family_name}' создана!\n\n"
             "📝 *Введите ваше имя, которое будут видеть другие участники семьи:*\n"
@@ -973,25 +897,19 @@ async def handle_family_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return ASKING_USER_NAME
     else:
-        await update.message.reply_text(
-            "❌ Ошибка при создании семьи. Попробуйте еще раз:"
-        )
+        await update.message.reply_text("❌ Ошибка при создании семьи. Попробуйте еще раз:")
         return ASKING_FAMILY_NAME
 
 async def handle_user_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает ввод имени пользователя для семьи"""
+    """Обрабатывает ввод имени пользователя"""
     user_name = update.message.text.strip()[:30]
-
     if not user_name:
-        await update.message.reply_text(
-            "Имя не может быть пустым. Введите ваше имя:"
-        )
+        await update.message.reply_text("Имя не может быть пустым. Введите ваше имя:")
         return ASKING_USER_NAME
 
     user = update.effective_user
     user_id, family_id, is_admin, _ = db.get_or_create_user(user.id)
 
-    # Получаем family_id из context (для создания или присоединения)
     if 'new_family_id' in context.user_data:
         family_id = context.user_data['new_family_id']
         family_name = context.user_data['new_family_name']
@@ -999,35 +917,21 @@ async def handle_user_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif 'joining_family_id' in context.user_data:
         family_id = context.user_data['joining_family_id']
         family_name = context.user_data['joining_family_name']
-        
-        # Добавляем пользователя в семью (если еще не добавлен)
         db.add_user_to_family(user_id, family_id)
-        
-        # Получаем invite_code семьи
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                'SELECT invite_code FROM families WHERE id = ?',
-                (family_id,)
-            )
+            cursor.execute('SELECT invite_code FROM families WHERE id = ?', (family_id,))
             family = cursor.fetchone()
             invite_code = family['invite_code'] if family else "???"
     else:
-        # Не нашли family_id в context - ошибка
-        await update.message.reply_text(
-            "❌ Ошибка при обработке. Попробуйте снова: /start"
-        )
+        await update.message.reply_text("❌ Ошибка при обработке. Попробуйте снова: /start")
         context.user_data.clear()
         return ConversationHandler.END
 
     if family_id and db.update_user_display_name(user_id, user_name):
-        # Получаем актуальный is_admin
         user_id, family_id, is_admin, _ = db.get_or_create_user(user.id)
-        
-        # Получаем последние действия для приветствия
         recent_activities_text = get_recent_activities_text(family_id)
         
-        # Новое приветствие БЕЗ подсказок
         welcome_text = f"🎉 Отлично, {user_name}!\n\n"
         welcome_text += f"Вы в семье *'{family_name}'*."
         welcome_text += recent_activities_text
@@ -1051,12 +955,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     user_id, family_id, is_admin, display_name = db.get_or_create_user(user.id)
 
-    # Основные действия
     if data == "back_to_main":
         if family_id:
             family_name = db.get_family_name(family_id)
             recent_activities_text = get_recent_activities_text(family_id)
-            
             welcome_text = f"👋 *{display_name}, добро пожаловать в семью {family_name}!*"
             welcome_text += recent_activities_text
             
@@ -1073,18 +975,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "show_list":
         if not family_id:
-            await query.edit_message_text(
-                "У вас нет семьи. Используйте /start",
-                reply_markup=get_back_keyboard()
-            )
+            await query.edit_message_text("У вас нет семьи. Используйте /start", reply_markup=get_back_keyboard())
             return
 
         items = db.get_active_items_with_users(family_id)
         if not items:
             await query.edit_message_text(
-                "📭 *Список покупок пуст!*\n\n"
-                "Просто напишите товар в чат, чтобы добавить его.\n"
-                "Можно добавить несколько товаров через перенос строки.",
+                "📭 *Список покупок пуст!*\n\nПросто напишите товар в чат, чтобы добавить его.",
                 parse_mode='Markdown',
                 reply_markup=get_back_keyboard()
             )
@@ -1094,7 +991,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if len(item) >= 4:
                     item_id, item_text, created_at, user_name = item
                     time_str = format_time(created_at)
-                    # Товар жирным, остальное обычным
                     text += f"{i}. {format_item_text(item_text)} ({user_name}, {time_str})\n"
 
             await query.edit_message_text(
@@ -1105,17 +1001,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "show_archive":
         if not family_id:
-            await query.edit_message_text(
-                "У вас нет семьи. Используйте /start",
-                reply_markup=get_back_keyboard()
-            )
+            await query.edit_message_text("У вас нет семьи. Используйте /start", reply_markup=get_back_keyboard())
             return
 
         items = db.get_archive_items_with_users(family_id, 20)
         if not items:
             await query.edit_message_text(
-                "🛒 *Купленные товары*\n\n"
-                "Здесь появятся товары, которые вы отметите как купленные.",
+                "🛒 *Купленные товары*\n\nЗдесь появятся товары, которые вы отметите как купленные.",
                 parse_mode='Markdown',
                 reply_markup=get_back_keyboard()
             )
@@ -1141,11 +1033,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         success = db.mark_item_as_bought(item_id, user_id)
 
         if success:
-            # Благодарственная фраза на 3 секунды (show_alert=True для гарантированного отображения)
             thankyou = get_random_thankyou()
             await query.answer(thankyou, show_alert=True)
 
-            # Обновляем список
             items = db.get_active_items_with_users(family_id)
             if items:
                 text = "📃 *Список покупок:*\n\n"
@@ -1162,8 +1052,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             else:
                 await query.edit_message_text(
-                    "📭 *Список покупок пуст!*\n\n"
-                    "Просто напишите товар в чат, чтобы добавить его.",
+                    "📭 *Список покупок пуст!*",
                     parse_mode='Markdown',
                     reply_markup=get_back_keyboard()
                 )
@@ -1175,7 +1064,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         item_id = int(data.split("_")[2])
         context.user_data['pending_delete_item_id'] = item_id
         
-        # Получаем информацию о товаре
         items = db.get_active_items_with_users(family_id)
         item_text = ""
         for item in items:
@@ -1184,10 +1072,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 break
         
         await query.edit_message_text(
-            f"🗑️ *Подтверждение удаления*\n\n"
-            f"Вы уверены, что хотите удалить товар:\n"
-            f"{format_item_text(item_text)}\n\n"
-            f"⚠️ *Это действие нельзя отменить!*",
+            f"🗑️ *Подтверждение удаления*\n\nВы уверены, что хотите удалить товар:\n{format_item_text(item_text)}\n\n⚠️ *Это действие нельзя отменить!*",
             parse_mode='Markdown',
             reply_markup=get_confirmation_keyboard(item_id)
         )
@@ -1218,8 +1103,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             else:
                 await query.edit_message_text(
-                    "📭 *Список покупок пуст!*\n\n"
-                    "Просто напишите товар в чат, чтобы добавить его.",
+                    "📭 *Список покупок пуст!*",
                     parse_mode='Markdown',
                     reply_markup=get_back_keyboard()
                 )
@@ -1227,7 +1111,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ Ошибка при удалении", show_alert=True)
 
     elif data == "cancel_delete":
-        # Возвращаемся к списку покупок
         if not family_id:
             return
 
@@ -1247,8 +1130,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             await query.edit_message_text(
-                "📭 *Список покупок пуст!*\n\n"
-                "Просто напишите товар в чат, чтобы добавить его.",
+                "📭 *Список покупок пуст!*",
                 parse_mode='Markdown',
                 reply_markup=get_back_keyboard()
             )
@@ -1263,7 +1145,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if success:
             await query.answer("✅ Товар возвращен в список покупок", show_alert=True)
             
-            # Обновляем список архива
             items = db.get_archive_items_with_users(family_id, 20)
             if items:
                 text = "🛒 *Купленные товары:*\n\n"
@@ -1280,8 +1161,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             else:
                 await query.edit_message_text(
-                    "🛒 *Купленные товары*\n\n"
-                    "Здесь появятся товары, которые вы отметите как купленные.",
+                    "🛒 *Купленные товары*\n\nЗдесь появятся товары, которые вы отметите как купленные.",
                     parse_mode='Markdown',
                     reply_markup=get_back_keyboard()
                 )
@@ -1294,8 +1174,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         await query.edit_message_text(
-            "👑 *Панель администратора*\n\n"
-            "Здесь вы можете управлять семьей:",
+            "👑 *Панель администратора*\n\nЗдесь вы можете управлять семьей:",
             parse_mode='Markdown',
             reply_markup=get_admin_keyboard()
         )
@@ -1304,20 +1183,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not family_id or not is_admin:
             return
 
-        # Получаем код приглашения
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                'SELECT invite_code, name FROM families WHERE id = ?',
-                (family_id,)
-            )
+            cursor.execute('SELECT invite_code, name FROM families WHERE id = ?', (family_id,))
             family = cursor.fetchone()
 
         if family:
-            text = f"👪 *Приглашение в семью '{family['name']}'*\n\n"
-            text += f"Код для присоединения:\n`{family['invite_code']}`\n\n"
-            text += "Поделитесь этим кодом с членами семьи."
-
+            text = f"👪 *Приглашение в семью '{family['name']}'*\n\nКод для присоединения:\n`{family['invite_code']}`\n\nПоделитесь этим кодом с членами семьи."
             await query.edit_message_text(
                 text,
                 parse_mode='Markdown',
@@ -1328,12 +1200,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not family_id or not is_admin:
             return
 
-        # Устанавливаем флаг, что ожидаем новое название
         context.user_data['awaiting_new_family_name'] = True
-
         await query.edit_message_text(
-            "✏️ *Изменение названия семьи*\n\n"
-            "Введите новое название для семьи (до 50 символов):",
+            "✏️ *Изменение названия семьи*\n\nВведите новое название для семьи (до 50 символов):",
             parse_mode='Markdown',
             reply_markup=get_cancel_keyboard()
         )
@@ -1343,11 +1212,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         members = db.get_family_members(family_id)
-
         if not members:
             await query.edit_message_text(
-                "👥 *Участники семьи*\n\n"
-                "В семье пока только вы.",
+                "👥 *Участники семьи*\n\nВ семье пока только вы.",
                 parse_mode='Markdown',
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("⬅️ Назад", callback_data="admin_panel")]
@@ -1362,7 +1229,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"{role}{name}\n"
 
         text += "\n❌ - исключить, ⬆️ - сделать админом, ⬇️ - убрать админа"
-
         await query.edit_message_text(
             text,
             parse_mode='Markdown',
@@ -1378,7 +1244,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if success:
             await query.answer("Участник исключен", show_alert=True)
-            # Возвращаемся к списку участников
             members = db.get_family_members(family_id)
 
             if members:
@@ -1389,7 +1254,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     text += f"{role}{name}\n"
 
                 text += "\n❌ - исключить, ⬆️ - сделать админом, ⬇️ - убрать админа"
-
                 await query.edit_message_text(
                     text,
                     parse_mode='Markdown',
@@ -1397,8 +1261,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             else:
                 await query.edit_message_text(
-                    "👥 *Участники семьи*\n\n"
-                    "В семье пока только вы.",
+                    "👥 *Участники семьи*\n\nВ семье пока только вы.",
                     parse_mode='Markdown',
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("⬅️ Назад", callback_data="admin_panel")]
@@ -1414,8 +1277,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if success:
             await query.answer("Права администратора переданы", show_alert=True)
-            is_admin = False  # Теперь текущий пользователь не админ
-
+            is_admin = False
             members = db.get_family_members(family_id)
 
             if members:
@@ -1426,7 +1288,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     text += f"{role}{name}\n"
 
                 text += "\n❌ - исключить, ⬆️ - сделать админом, ⬇️ - убрать админа"
-
                 await query.edit_message_text(
                     text,
                     parse_mode='Markdown',
@@ -1438,17 +1299,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         member_id = int(data.split("_")[1])
-        # Для понижения просто снимаем флаг админа
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                'UPDATE users SET is_admin = FALSE WHERE id = ? AND family_id = ?',
-                (member_id, family_id)
-            )
+            cursor.execute('UPDATE users SET is_admin = FALSE WHERE id = ? AND family_id = ?', (member_id, family_id))
             conn.commit()
 
         await query.answer("Админские права сняты", show_alert=True)
-
         members = db.get_family_members(family_id)
 
         if members:
@@ -1459,7 +1315,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text += f"{role}{name}\n"
 
             text += "\n❌ - исключить, ⬆️ - сделать админом, ⬇️ - убрать админа"
-
             await query.edit_message_text(
                 text,
                 parse_mode='Markdown',
@@ -1470,12 +1325,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not family_id or not is_admin:
             return
 
-        # Обновляем шаблоны на основе часто покупаемых товаров
         try:
             with db.get_connection() as conn:
                 cursor = conn.cursor()
-                
-                # Получаем топ-4 часто покупаемых товара за все время
                 cursor.execute('''
                     SELECT LOWER(text) as normalized_text, COUNT(*) as count
                     FROM archive_items
@@ -1484,42 +1336,30 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ORDER BY count DESC
                     LIMIT ?
                 ''', (family_id, TEMPLATES_COUNT))
-                
                 top_items = cursor.fetchall()
                 
                 if top_items:
-                    # Очищаем старые шаблоны
                     cursor.execute('DELETE FROM templates WHERE family_id = ?', (family_id,))
-                    
-                    # Добавляем новые шаблоны с оригинальным регистром (берем первое вхождение)
                     for item in top_items:
                         cursor.execute('''
                             SELECT text FROM archive_items 
                             WHERE family_id = ? AND LOWER(text) = ?
                             LIMIT 1
                         ''', (family_id, item['normalized_text']))
-                        
                         original_text = cursor.fetchone()
                         if original_text:
-                            cursor.execute('''
-                                INSERT INTO templates (family_id, item_text)
-                                VALUES (?, ?)
-                            ''', (family_id, original_text['text']))
-                    
+                            cursor.execute('INSERT INTO templates (family_id, item_text) VALUES (?, ?)', (family_id, original_text['text']))
                     conn.commit()
-                    
                     new_templates = [item['normalized_text'].capitalize() for item in top_items]
                     await query.answer(f"Шаблоны обновлены: {', '.join(new_templates)}", show_alert=True)
                 else:
                     await query.answer("Недостаточно данных для обновления шаблонов", show_alert=True)
-                
         except Exception as e:
             logger.error(f"Ошибка при обновлении шаблонов: {e}")
             await query.answer("Ошибка при обновлении шаблонов", show_alert=True)
         
         await query.edit_message_text(
-            "🔄 *Обновление шаблонов*\n\n"
-            "Шаблоны обновлены на основе часто покупаемых товаров.",
+            "🔄 *Обновление шаблонов*\n\nШаблоны обновлены на основе часто покупаемых товаров.",
             parse_mode='Markdown',
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("⬅️ Назад", callback_data="admin_panel")]
@@ -1542,13 +1382,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
     elif data == "create_family":
-        await ask_family_name(update, context)
-        return ASKING_FAMILY_NAME
+        return await ask_family_name(update, context)
 
     elif data == "join_family":
         await query.edit_message_text(
-            "🔗 *Присоединение к семье*\n\n"
-            "Введите код приглашения (6-8 символов):",
+            "🔗 *Присоединение к семье*\n\nВведите код приглашения (6-8 символов):",
             parse_mode='Markdown',
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_main")]
@@ -1576,8 +1414,7 @@ def main():
 
     try:
         # Создаем Application
-        from telegram.ext import ApplicationBuilder
-        app = ApplicationBuilder().token(BOT_TOKEN).build()
+        app = Application.builder().token(BOT_TOKEN).build()
 
         # ConversationHandler для создания семьи и присоединения
         conv_handler = ConversationHandler(
@@ -1599,17 +1436,17 @@ def main():
             ],
         )
 
-        # Регистрируем обработчики в правильном порядке
+        # Регистрируем обработчики
         app.add_handler(CommandHandler("start", start))
-        app.add_handler(conv_handler)  # ConversationHandler
-        app.add_handler(CallbackQueryHandler(button_handler))  # Обычные кнопки
+        app.add_handler(conv_handler)
+        app.add_handler(CallbackQueryHandler(button_handler))
 
         print("✅ Бот инициализирован успешно!")
         print("📱 Используйте /start в Telegram")
         print("="*60)
 
-        # Запускаем бота
-        app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+        # Запускаем бота (исправлено: убран allowed_updates)
+        app.run_polling(drop_pending_updates=True)
 
     except Exception as e:
         print(f"❌ ОШИБКА: {e}")
