@@ -1,3 +1,4 @@
+import asyncio
 import os
 import logging
 import sqlite3
@@ -1395,7 +1396,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ГЛАВНАЯ ФУНКЦИЯ ====================
 
-def main():
+async def main():
+    """Асинхронная главная функция для Bothost"""
     print("="*60)
     print("🤖 Запуск ОБНОВЛЕННОГО бота для списка покупок...")
     print("="*60)
@@ -1445,8 +1447,13 @@ def main():
         print("📱 Используйте /start в Telegram")
         print("="*60)
 
-        # Запускаем бота (исправлено: убран allowed_updates)
-        app.run_polling(drop_pending_updates=True)
+        # ✅ ВАЖНО ДЛЯ BOTHOST: используем start_polling() вместо run_polling()
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(drop_pending_updates=True)
+        
+        # Держим бота запущенным
+        await asyncio.Event().wait()
 
     except Exception as e:
         print(f"❌ ОШИБКА: {e}")
@@ -1454,4 +1461,6 @@ def main():
         traceback.print_exc()
 
 if __name__ == '__main__':
-    main()
+    # ✅ ВАЖНО ДЛЯ BOTHOST: запускаем через asyncio.run()
+    import asyncio
+    asyncio.run(main())
